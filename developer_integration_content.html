@@ -1,0 +1,225 @@
+<h2>Developer Integration Guide</h2>
+<p>Integrating the <strong>Component Recogniser</strong> into a larger web application requires a modular approach, moving beyond a single HTML file. This guide outlines common strategies and provides code snippets for popular frameworks like React and Vue.</p>
+<h3>1. Component-Based Integration (React / Vue)</h3>
+<p>For modern JavaScript frameworks, encapsulating the p5.js sketch within a dedicated UI component is the recommended approach. This allows for better state management, prop-based configuration, and event-driven communication with the rest of your application.</p>
+<h4>React Example</h4>
+<p>This example demonstrates how to create a <code>ComponentRecognizer</code> React component that wraps the p5.js sketch. The model URL can be passed as a prop, and classification results can be emitted via a callback prop.</p>
+<pre><code class="language-jsx">import React, { useRef, useEffect, useState } from 'react';
+import p5 from 'p5';
+import * as ml5 from 'ml5';
+
+const ComponentRecognizer = ({ modelUrl, onClassify }) =&gt; {
+  const canvasRef = useRef(null);
+  const p5Instance = useRef(null);
+  const [status, setStatus] = useState('Initializing...');
+
+  useEffect(() =&gt; {
+    const sketch = (p) =&gt; {
+      let classifier;
+      let video;
+      let flipped;
+      let modelReady = false;
+      let camReady = false;
+
+      p.preload = () =&gt; {
+        setStatus('Loading model...');
+        try {
+          classifier = ml5.imageClassifier(
+            modelUrl + 'model.json',
+            () =&gt; {
+              modelReady = true;
+              if (camReady) {
+                setStatus('Ready');
+                classifyFrame();
+              }
+            }
+          );
+        } catch (err) {
+          setStatus('Failed to load model. Check URL.');
+          console.error(err);
+        }
+      };
+
+      p.setup = () =&gt; {
+        const cnv = p.createCanvas(640, 480);
+        cnv.parent(canvasRef.current);
+
+        video = p.createCapture(p.VIDEO, () =&gt; {
+          camReady = true;
+          if (modelReady) {
+            setStatus('Ready');
+            classifyFrame();
+          } else {
+            setStatus('Camera ready - loading model...');
+          }
+        });
+        video.size(640, 480);
+        video.hide();
+      };
+
+      p.draw = () =&gt; {
+        if (!camReady) return;
+        flipped = ml5.flipImage(video);
+        p.image(flipped, 0, 0, p.width, p.height);
+      };
+
+      const classifyFrame = () =&gt; {
+        if (!classifier || !video) return;
+        const src = ml5.flipImage(video);
+        classifier.classify(src, (err, res) =&gt; {
+          if (err) {
+            console.error('Classification error:', err);
+            // Optionally, re-attempt classification after a delay
+            setTimeout(classifyFrame, 1000);
+            return;
+          }
+          if (onClassify &amp;&amp; res) {
+            onClassify(res);
+          }
+          classifyFrame(); // Loop
+        });
+      };
+    };
+
+    p5Instance.current = new p5(sketch, canvasRef.current);
+
+    return () =&gt; {
+      // Cleanup: Stop the p5 sketch and webcam when component unmounts
+      if (p5Instance.current) {
+        p5Instance.current.remove();
+      }
+    };
+  }, [modelUrl, onClassify]);
+
+  return (
+    &lt;div&gt;
+      &lt;div ref={canvasRef}&gt;&lt;/div&gt;
+      &lt;p&gt;Status: {status}&lt;/p&gt;
+    &lt;/div&gt;
+  );
+};
+
+export default ComponentRecognizer;
+</code></pre>
+<h4>Vue Example</h4>
+<p>This Vue component demonstrates a similar integration, using <code>onMounted</code> and <code>onUnmounted</code> hooks for lifecycle management.</p>
+<pre><code class="language-vue">&lt;template&gt;
+  &lt;div&gt;
+    &lt;div ref=&quot;canvasContainer&quot;&gt;&lt;/div&gt;
+    &lt;p&gt;Status: {{ status }}&lt;/p&gt;
+  &lt;/div&gt;
+&lt;/template&gt;
+
+&lt;script setup&gt;
+import { ref, onMounted, onUnmounted } from 'vue';
+import p5 from 'p5';
+import * as ml5 from 'ml5';
+
+const props = defineProps({
+  modelUrl: String,
+});
+
+const emit = defineEmits(['classify']);
+
+const canvasContainer = ref(null);
+const p5Instance = ref(null);
+const status = ref('Initializing...');
+
+onMounted(() =&gt; {
+  const sketch = (p) =&gt; {
+    let classifier;
+    let video;
+    let flipped;
+    let modelReady = false;
+    let camReady = false;
+
+    p.preload = () =&gt; {
+      status.value = 'Loading model...';
+      try {
+        classifier = ml5.imageClassifier(
+          props.modelUrl + 'model.json',
+          () =&gt; {
+            modelReady = true;
+            if (camReady) {
+              status.value = 'Ready';
+              classifyFrame();
+            }
+          }
+        );
+      } catch (err) {
+        status.value = 'Failed to load model. Check URL.';
+        console.error(err);
+      }
+    };
+
+    p.setup = () =&gt; {
+      const cnv = p.createCanvas(640, 480);
+      cnv.parent(canvasContainer.value);
+
+      video = p.createCapture(p.VIDEO, () =&gt; {
+        camReady = true;
+        if (modelReady) {
+          status.value = 'Ready';
+          classifyFrame();
+        } else {
+          status.value = 'Camera ready - loading model...';
+        }
+      });
+      video.size(640, 480);
+      video.hide();
+    };
+
+    p.draw = () =&gt; {
+      if (!camReady) return;
+      flipped = ml5.flipImage(video);
+      p.image(flipped, 0, 0, p.width, p.height);
+    };
+
+    const classifyFrame = () =&gt; {
+      if (!classifier || !video) return;
+      const src = ml5.flipImage(video);
+      classifier.classify(src, (err, res) =&gt; {
+        if (err) {
+          console.error('Classification error:', err);
+          setTimeout(classifyFrame, 1000);
+          return;
+        }
+        if (res) {
+          emit('classify', res);
+        }
+        classifyFrame(); // Loop
+      });
+    };
+  };
+
+  p5Instance.value = new p5(sketch, canvasContainer.value);
+});
+
+onUnmounted(() =&gt; {
+  // Cleanup: Stop the p5 sketch and webcam when component unmounts
+  if (p5Instance.value) {
+    p5Instance.value.remove();
+  }
+});
+&lt;/script&gt;
+</code></pre>
+<h3>2. Headless Worker Approach</h3>
+<p>If your application doesn't require displaying the live video feed from p5.js, you can run the classification logic "headlessly." This means the p5.js canvas is not rendered, but the webcam feed is still processed by ml5.js.</p>
+<ul>
+<li><strong>Hidden Video Element</strong>: Instead of <code>p.createCanvas</code>, you might directly use a hidden <code>&lt;video&gt;</code> element in your HTML and pass it to <code>p.createCapture</code>.</li>
+<li><strong>Data-Only Output</strong>: The <code>onClassify</code> callback (or <code>gotResult</code> in the original sketch) would be the primary way to interact with the classification results. You would then use your application's native UI to display this data.</li>
+</ul>
+<h3>3. API &amp; Backend Integration</h3>
+<p>For more complex applications, the client-side recognition can be a trigger for backend processes:</p>
+<ul>
+<li><strong>Database Lookup</strong>: Once a component is identified with high confidence, send the classification label to your backend API. The backend can then query a database for detailed information (e.g., datasheets, inventory, pricing) and return it to the client.</li>
+<li><strong>Audit Logging/Verification</strong>: Capture a still image from the video feed (<code>p.get().save('snapshot.png')</code> or <code>canvas.toDataURL()</code>) when a significant classification occurs. This image, along with the classification data, can be uploaded to a server for audit trails, quality control, or manual verification.</li>
+</ul>
+<h3>Architectural Recommendations</h3>
+<p>To maintain a clean and scalable codebase, consider separating concerns:</p>
+<ul>
+<li><strong><code>ScannerService.js</code> (or similar)</strong>: A pure JavaScript module (not tied to a UI framework) that handles the <code>ml5.imageClassifier</code> instantiation, webcam access, and the classification loop. It should expose methods to start/stop scanning and emit events (or use callbacks) for classification results.</li>
+<li><strong><code>ScannerUI.jsx</code>/<code>.vue</code></strong>: A UI component responsible solely for rendering the video feed (if needed) and displaying the classification results received from the <code>ScannerService</code>. It should not contain the core ML logic.</li>
+<li><strong><code>App.js</code>/<code>.vue</code> (or parent component)</strong>: Manages the overall application state, orchestrates communication between the <code>ScannerUI</code> and <code>ScannerService</code>, and handles interactions with backend APIs based on classification events.</li>
+</ul>
+<p>This separation ensures that your ML logic is reusable, testable, and independent of your chosen UI framework.</p>
