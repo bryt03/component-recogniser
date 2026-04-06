@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Component Recogniser</title>
+
+  <!-- ─── Core Libraries ─────────────────────────────────────────────────── -->
+  <!-- p5.js – creative coding canvas & webcam helpers -->
+  <script src="https://cdn.jsdelivr.net/npm/p5@1/lib/p5.min.js"></script>
+  <!-- ml5.js – friendly machine-learning wrapper (0.x branch keeps
+       the legacy imageClassifier + flipImage API used by Teachable Machine) -->
+  <script src="https://unpkg.com/ml5@0.12.2/dist/ml5.min.js"></script>
+
+  <style>
+    /* ── Reset & base ───────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0f1117;
+      --surface:   #1a1d27;
+      --border:    #2e3347;
+      --accent:    #6c63ff;
+      --accent2:   #00d4aa;
+      --text:      #e8eaf6;
+      --muted:     #7c7f96;
+      --danger:    #ff5252;
+      --success:   #00e676;
+      --radius:    12px;
+      --shadow:    0 8px 32px rgba(0,0,0,.45);
+    }
+
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px 16px 48px;
+      gap: 24px;
+    }
+
+    /* ── Header ─────────────────────────────────────────────────────────── */
+    header {
+      text-align: center;
+    }
+    header h1 {
+      font-size: clamp(1.6rem, 4vw, 2.4rem);
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    header p {
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin-top: 6px;
+    }
+
+    /* ── Model URL config card ───────────────────────────────────────────── */
+    .config-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      width: 100%;
+      max-width: 720px;
+      box-shadow: var(--shadow);
+    }
+    .config-card label {
+      display: block;
+      font-size: 0.78rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+    .config-row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .config-row input {
+      flex: 1;
+      min-width: 200px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      padding: 10px 14px;
+      font-size: 0.9rem;
+      outline: none;
+      transition: border-color .2s;
+    }
+    .config-row input:focus { border-color: var(--accent); }
+    .config-row button {
+      background: linear-gradient(135deg, var(--accent), #8b5cf6);
+      border: none;
+      border-radius: 8px;
+      color: #fff;
+      padding: 10px 22px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity .2s, transform .1s;
+      white-space: nowrap;
+    }
+    .config-row button:hover  { opacity: .88; }
+    .config-row button:active { transform: scale(.97); }
+
+    .hint {
+      margin-top: 8px;
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+    .hint a { color: var(--accent2); text-decoration: none; }
+    .hint a:hover { text-decoration: underline; }
+
+    /* ── Main layout ─────────────────────────────────────────────────────── */
+    .main-grid {
+      display: grid;
+      grid-template-columns: 1fr 320px;
+      gap: 20px;
+      width: 100%;
+      max-width: 1060px;
+      align-items: start;
+    }
+    @media (max-width: 780px) {
+      .main-grid { grid-template-columns: 1fr; }
+    }
+
+    /* ── Canvas wrapper ──────────────────────────────────────────────────── */
+    .canvas-wrapper {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      box-shadow: var(--shadow);
+      position: relative;
+      aspect-ratio: 4/3;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .canvas-wrapper canvas {
+      display: block;
+      width: 100% !important;
+      height: 100% !important;
+      object-fit: cover;
+    }
+
+    /* overlay badge shown before model loads */
+    #status-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(15,17,23,.82);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      z-index: 10;
+      transition: opacity .4s;
+    }
+    #status-overlay.hidden { opacity: 0; pointer-events: none; }
+
+    .spinner {
+      width: 44px; height: 44px;
+      border: 4px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    #overlay-msg {
+      font-size: 1rem;
+      color: var(--text);
+      text-align: center;
+      padding: 0 20px;
+    }
+    #overlay-msg.error { color: var(--danger); }
+
+    /* ── Side panel ──────────────────────────────────────────────────────── */
+    .side-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    /* result card */
+    .result-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      box-shadow: var(--shadow);
+    }
+    .result-card .card-title {
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--muted);
+      margin-bottom: 14px;
+    }
+
+    /* top prediction */
+    #top-label {
+      font-size: 1.7rem;
+      font-weight: 700;
+      color: var(--accent2);
+      word-break: break-word;
+      min-height: 2.2rem;
+      line-height: 1.2;
+    }
+    #top-confidence {
+      margin-top: 4px;
+      font-size: 0.88rem;
+      color: var(--muted);
+    }
+
+    /* confidence bar */
+    .conf-bar-wrap {
+      margin-top: 14px;
+      height: 6px;
+      background: var(--border);
+      border-radius: 99px;
+      overflow: hidden;
+    }
+    #conf-bar {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      border-radius: 99px;
+      transition: width .3s ease;
+    }
+
+    /* divider */
+    .divider {
+      height: 1px;
+      background: var(--border);
+      margin: 16px 0;
+    }
+
+    /* all predictions list */
+    .card-title.small { margin-bottom: 10px; }
+    #predictions-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .pred-row {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .pred-meta {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.82rem;
+    }
+    .pred-name  { color: var(--text); font-weight: 500; }
+    .pred-pct   { color: var(--muted); }
+    .pred-track {
+      height: 5px;
+      background: var(--border);
+      border-radius: 99px;
+      overflow: hidden;
+    }
+    .pred-fill {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 99px;
+      transition: width .3s ease;
+    }
+    .pred-fill.top { background: linear-gradient(90deg, var(--accent), var(--accent2)); }
+
+    /* info card */
+    .info-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      box-shadow: var(--shadow);
+      font-size: 0.82rem;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+    .info-card strong { color: var(--text); }
+
+    /* ── Footer ──────────────────────────────────────────────────────────── */
+    footer {
+      font-size: 0.75rem;
+      color: var(--muted);
+      text-align: center;
+    }
+    footer a { color: var(--accent2); text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+
+  <!-- ── Header ──────────────────────────────────────────────────────────── -->
+  <header>
+    <h1>Component Recogniser</h1>
+    <p>Real-time electronic component identification powered by Teachable Machine &amp; ml5.js</p>
+  </header>
+
+  <!-- ── Model URL config ─────────────────────────────────────────────────── -->
+  <div class="config-card">
+    <label for="model-url-input">Teachable Machine Model URL</label>
+    <div class="config-row">
+      <input
+        type="text"
+        id="model-url-input"
+        placeholder="https://teachablemachine.withgoogle.com/models/YOUR_MODEL_ID/"
+        value="https://teachablemachine.withgoogle.com/models/bXy2kDNi/"
+      />
+      <button id="load-btn">Load Model</button>
+    </div>
+    <p class="hint">
+      Train your own model at
+      <a href="https://teachablemachine.withgoogle.com" target="_blank" rel="noopener">
+        teachablemachine.withgoogle.com
+      </a>
+      and paste the shareable link above.
+    </p>
+  </div>
+
+  <!-- ── Main grid ────────────────────────────────────────────────────────── -->
+  <div class="main-grid">
+
+    <!-- Canvas + overlay -->
+    <div class="canvas-wrapper" id="canvas-holder">
+      <div id="status-overlay">
+        <div class="spinner" id="spinner"></div>
+        <div id="overlay-msg">Waiting for model URL…</div>
+      </div>
+      <!-- p5.js canvas injected here -->
+    </div>
+
+    <!-- Side panel -->
+    <div class="side-panel">
+
+      <!-- Top prediction -->
+      <div class="result-card">
+        <div class="card-title">Top Prediction</div>
+        <div id="top-label">—</div>
+        <div id="top-confidence">Confidence: —</div>
+        <div class="conf-bar-wrap">
+          <div id="conf-bar"></div>
+        </div>
+      </div>
+
+      <!-- All predictions -->
+      <div class="result-card">
+        <div class="card-title small">All Classes</div>
+        <div id="predictions-list">
+          <span style="color:var(--muted);font-size:.85rem;">Load a model to see results.</span>
+        </div>
+      </div>
+
+      <!-- Info card -->
+      <div class="info-card">
+        <strong>How it works</strong><br/>
+        The webcam feed is analysed on every frame using a
+        <strong>Teachable Machine</strong> image model loaded via
+        <strong>ml5.js</strong>. The model runs entirely in your browser —
+        no data is sent to any server.
+        <br/><br/>
+        <strong>Privacy:</strong> Camera access is used only locally and is
+        never uploaded or stored.
+      </div>
+
+    </div>
+  </div>
+
+   <!-- ── Developer Integration Guide ────────────────────────────────────────── -->
+  <div class="config-card" style="max-width: 1060px; padding: 24px 32px;">
+    <div id="developer-integration-content"></div>
+  </div>
+
+  <!-- ── Footer ──────────────────────────────────────────────────────────── -->
+  <footer>
+    Built with
+    <a href="https://p5js.org" target="_blank" rel="noopener">p5.js</a>,
+    <a href="https://ml5js.org" target="_blank" rel="noopener">ml5.js</a> &amp;
+    <a href="https://teachablemachine.withgoogle.com" target="_blank" rel="noopener">Teachable Machine</a>
+  </footer>
+
+  <!-- ── App logic ─────────────────────────────────────────────────────────── -->
+  <script>
+    /* ================================================================
+       Configuration
+    ================================================================ */
+    // Default model – replace with your own Teachable Machine URL.
+    // The URL must end with a trailing slash.
+    let MODEL_URL = document.getElementById('model-url-input').value.trim();
+
+    /* ================================================================
+       State
+    ================================================================ */
+    let classifier = null;
+    let video      = null;
+    let flipped    = null;
+    let results    = [];
+    let modelReady = false;
+    let camReady   = false;
+    let p5Instance = null;
+
+    /* ================================================================
+       DOM helpers
+    ================================================================ */
+    const overlay     = document.getElementById('status-overlay');
+    const overlayMsg  = document.getElementById('overlay-msg');
+    const spinner     = document.getElementById('spinner');
+    const topLabel    = document.getElementById('top-label');
+    const topConf     = document.getElementById('top-confidence');
+    const confBar     = document.getElementById('conf-bar');
+    const predList    = document.getElementById('predictions-list');
+
+    function showOverlay(msg, isError = false) {
+      overlay.classList.remove('hidden');
+      overlayMsg.textContent = msg;
+      overlayMsg.className   = isError ? 'error' : '';
+      spinner.style.display  = isError ? 'none' : 'block';
+    }
+
+    function hideOverlay() {
+      overlay.classList.add('hidden');
+    }
+
+    function updateSidePanel(res) {
+      if (!res || res.length === 0) return;
+
+      const top = res[0];
+      const pct = (top.confidence * 100).toFixed(1);
+
+      topLabel.textContent = top.label;
+      topConf.textContent  = `Confidence: ${pct}%`;
+      confBar.style.width  = `${pct}%`;
+
+      // Rebuild all-classes list
+      predList.innerHTML = '';
+      res.forEach((r, i) => {
+        const p = (r.confidence * 100).toFixed(1);
+        const row = document.createElement('div');
+        row.className = 'pred-row';
+        row.innerHTML = `
+          <div class="pred-meta">
+            <span class="pred-name">${escHtml(r.label)}</span>
+            <span class="pred-pct">${p}%</span>
+          </div>
+          <div class="pred-track">
+            <div class="pred-fill${i === 0 ? ' top' : ''}"
+                 style="width:${p}%"></div>
+          </div>`;
+        predList.appendChild(row);
+      });
+    }
+
+    function escHtml(str) {
+      return str.replace(/[&<>"']/g, c => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+    }
+
+    /* ================================================================
+       p5.js sketch
+    ================================================================ */
+    function startSketch() {
+      // Remove any previous p5 instance
+      if (p5Instance) {
+        p5Instance.remove();
+        p5Instance = null;
+      }
+
+      p5Instance = new p5(function(p) {
+
+        p.preload = function() {
+          showOverlay('Loading model…');
+          try {
+            classifier = ml5.imageClassifier(
+              MODEL_URL + 'model.json',
+              () => {
+                modelReady = true;
+                if (camReady) {
+                  hideOverlay();
+                  classifyFrame();
+                }
+              }
+            );
+          } catch (err) {
+            showOverlay('Failed to load model. Check the URL and try again.', true);
+            console.error(err);
+          }
+        };
+
+        p.setup = function() {
+          const holder = document.getElementById('canvas-holder');
+          const w = holder.clientWidth  || 640;
+          const h = holder.clientHeight || 480;
+          const cnv = p.createCanvas(w, h);
+          cnv.parent('canvas-holder');
+
+          video = p.createCapture(p.VIDEO, function() {
+            camReady = true;
+            if (modelReady) {
+              hideOverlay();
+              classifyFrame();
+            } else {
+              showOverlay('Camera ready — loading model…');
+            }
+          });
+          video.size(w, h);
+          video.hide();
+        };
+
+        p.draw = function() {
+          if (!camReady) return;
+          flipped = ml5.flipImage(video);
+          p.image(flipped, 0, 0, p.width, p.height);
+
+          if (modelReady && results.length > 0) {
+            drawOverlayLabel(p, results[0]);
+          }
+        };
+
+        // Draw a subtle label badge on the canvas
+        function drawOverlayLabel(p, top) {
+          const pct   = (top.confidence * 100).toFixed(1);
+          const txt   = `${top.label}  ${pct}%`;
+          const pad   = 12;
+          const fSize = Math.max(14, p.width * 0.028);
+
+          p.textSize(fSize);
+          const tw = p.textWidth(txt);
+          const bw = tw + pad * 2;
+          const bh = fSize + pad * 1.6;
+          const bx = (p.width - bw) / 2;
+          const by = p.height - bh - 14;
+
+          // Badge background
+          p.noStroke();
+          p.fill(0, 0, 0, 160);
+          p.rect(bx, by, bw, bh, 8);
+
+          // Accent left bar
+          p.fill(108, 99, 255);
+          p.rect(bx, by, 4, bh, 8, 0, 0, 8);
+
+          // Text
+          p.fill(255);
+          p.noStroke();
+          p.textAlign(p.CENTER, p.CENTER);
+          p.text(txt, p.width / 2, by + bh / 2);
+        }
+
+      }, 'canvas-holder');
+    }
+
+    /* ================================================================
+       Continuous classification loop
+    ================================================================ */
+    function classifyFrame() {
+      if (!classifier || !video) return;
+      const src = ml5.flipImage(video);
+      classifier.classify(src, function(err, res) {
+        if (err) {
+          console.error('Classification error:', err);
+          classifyFrame(); // keep trying
+          return;
+        }
+        results = res || [];
+        updateSidePanel(results);
+        classifyFrame(); // loop
+      });
+    }
+
+    /* ================================================================
+       Load button handler
+    ================================================================ */
+    document.getElementById('load-btn').addEventListener('click', function() {
+      const raw = document.getElementById('model-url-input').value.trim();
+      if (!raw) {
+        showOverlay('Please enter a valid Teachable Machine model URL.', true);
+        return;
+      }
+      MODEL_URL  = raw.endsWith('/') ? raw : raw + '/';
+      modelReady = false;
+      camReady   = false;
+      results    = [];
+      topLabel.textContent = '—';
+      topConf.textContent  = 'Confidence: —';
+      confBar.style.width  = '0%';
+      predList.innerHTML   = '<span style="color:var(--muted);font-size:.85rem;">Loading…</span>';
+      startSketch();
+    });
+
+    /* ================================================================
+       Auto-start with default model
+    ================================================================ */
+    if (MODEL_URL) {
+      startSketch();
+    } else {
+      showOverlay("Paste your Teachable Machine model URL above and click \"Load Model\".");
+    }
+
+    // Load and inject developer integration content
+    fetch("developer_integration_content.html")
+      .then(response => response.text())
+      .then(html => {
+        document.getElementById("developer-integration-content").innerHTML = html;
+      })
+      .catch(err => console.error("Failed to load developer integration content:", err));
+  </script>
+</body>
+</html>
